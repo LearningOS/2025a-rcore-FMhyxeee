@@ -51,10 +51,7 @@ lazy_static! {
     /// Global variable: TASK_MANAGER
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
-        let mut tasks = [TaskControlBlock {
-            task_cx: TaskContext::zero_init(),
-            task_status: TaskStatus::UnInit,
-        }; MAX_APP_NUM];
+        let mut tasks = [TaskControlBlock::new(); MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
             task.task_status = TaskStatus::Ready;
@@ -65,6 +62,7 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    // task_id_counter: [0; MAX_APP_NUM],
                 })
             },
         }
@@ -135,6 +133,40 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Get a mutable reference to the current task
+    fn get_current_task_mut(&self) -> &mut TaskControlBlock {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        unsafe {
+            // SAFETY: We know current is valid and we have exclusive access
+            &mut *(&mut inner.tasks[current] as *mut TaskControlBlock)
+        }
+    }
+
+    /// Get a reference to the current task
+    fn get_current_task(&self) -> &TaskControlBlock {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        unsafe {
+            // SAFETY: We know current is valid and we have exclusive access
+            &*(&inner.tasks[current] as *const TaskControlBlock)
+        }
+    }
+
+    /// Increment syscall count for current task
+    fn inc_current_syscall_count(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].inc_syscall_count(syscall_id);
+    }
+
+    /// Get syscall count for current task
+    fn get_current_syscall_count(&self, syscall_id: usize) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].get_syscall_count(syscall_id)
+    }   
 }
 
 /// Run the first task in task list.
@@ -168,4 +200,30 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Increment syscall count for current task
+pub fn inc_current_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.inc_current_syscall_count(syscall_id);
+}
+
+/// Get syscall count for current task
+pub fn get_current_syscall_count(syscall_id: usize) -> usize {
+    TASK_MANAGER.get_current_syscall_count(syscall_id)
+}
+
+/// Get a mutable reference to the current task (for sys_trace memory operations)
+pub fn get_current_task_mut() -> &'static mut TaskControlBlock {
+    unsafe {
+        // SAFETY: This is safe because we're in kernel mode and have exclusive access
+        &mut *(TASK_MANAGER.get_current_task_mut() as *mut TaskControlBlock)
+    }
+}
+
+/// Get a reference to the current task
+pub fn get_current_task() -> &'static TaskControlBlock {
+    unsafe {
+        // SAFETY: This is safe because we're in kernel mode
+        &*(TASK_MANAGER.get_current_task() as *const TaskControlBlock)
+    }
 }
