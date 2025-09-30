@@ -76,7 +76,7 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 /// 安全地读取用户空间的一个字节
 /// 检查地址是否有效且可读
 fn safe_read_user_byte(addr: usize) -> Option<u8> {
-    use crate::mm::{PageTable, VirtAddr};
+    use crate::mm::{PageTable, VirtAddr, PTEFlags};
     
     let token = current_user_token();
     let page_table = PageTable::from_token(token);
@@ -86,7 +86,7 @@ fn safe_read_user_byte(addr: usize) -> Option<u8> {
     // 尝试翻译虚拟页号
     if let Some(pte) = page_table.translate(vpn) {
         // 检查页表项是否有效且可读
-        if pte.is_valid() && pte.readable() {
+        if pte.is_valid() && pte.readable() && (pte.flags() & PTEFlags::U) != PTEFlags::empty() {
             // 获取物理页号并读取字节
             let ppn = pte.ppn();
             let offset = va.page_offset();
@@ -103,7 +103,7 @@ fn safe_read_user_byte(addr: usize) -> Option<u8> {
 /// 安全地写入用户空间的一个字节
 /// 检查地址是否有效且可写
 fn safe_write_user_byte(addr: usize, value: u8) -> bool {
-    use crate::mm::{PageTable, VirtAddr};
+    use crate::mm::{PageTable, VirtAddr, PTEFlags};
     
     let token = current_user_token();
     let page_table = PageTable::from_token(token);
@@ -113,7 +113,7 @@ fn safe_write_user_byte(addr: usize, value: u8) -> bool {
     // 尝试翻译虚拟页号
     if let Some(pte) = page_table.translate(vpn) {
         // 检查页表项是否有效且可写
-        if pte.is_valid() && pte.writable() {
+        if pte.is_valid() && pte.writable() && (pte.flags() & PTEFlags::U) != PTEFlags::empty() {
             // 获取物理页号并写入字节
             let ppn = pte.ppn();
             let offset = va.page_offset();
