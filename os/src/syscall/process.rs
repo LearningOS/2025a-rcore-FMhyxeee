@@ -73,37 +73,92 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     0 // 成功返回 0
 }
 
-/// TODO: Finish sys_trace to pass testcases
-/// HINT: You might reimplement it with virtual memory management.
+/// 安全地读取用户空间的一个字节
+/// 检查地址是否有效且可读
+fn safe_read_user_byte(addr: usize) -> Option<u8> {
+    use crate::mm::{PageTable, VirtAddr};
+    
+    let token = current_user_token();
+    let page_table = PageTable::from_token(token);
+    let va = VirtAddr::from(addr);
+    let vpn = va.floor();
+    
+    // 尝试翻译虚拟页号
+    if let Some(pte) = page_table.translate(vpn) {
+        // 检查页表项是否有效且可读
+        if pte.is_valid() && pte.readable() {
+            // 获取物理页号并读取字节
+            let ppn = pte.ppn();
+            let offset = va.page_offset();
+            let byte_array = ppn.get_bytes_array();
+            Some(byte_array[offset])
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+/// 安全地写入用户空间的一个字节
+/// 检查地址是否有效且可写
+fn safe_write_user_byte(addr: usize, value: u8) -> bool {
+    use crate::mm::{PageTable, VirtAddr};
+    
+    let token = current_user_token();
+    let page_table = PageTable::from_token(token);
+    let va = VirtAddr::from(addr);
+    let vpn = va.floor();
+    
+    // 尝试翻译虚拟页号
+    if let Some(pte) = page_table.translate(vpn) {
+        // 检查页表项是否有效且可写
+        if pte.is_valid() && pte.writable() {
+            // 获取物理页号并写入字节
+            let ppn = pte.ppn();
+            let offset = va.page_offset();
+            let byte_array = ppn.get_bytes_array();
+            byte_array[offset] = value;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+/// sys_trace 系统调用实现
+/// 支持三种操作模式：读取(0)、写入(1)、系统调用计数(2)
 pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
     match trace_request {
-        // Read a byte from memory address
+        // 读取用户地址处的一个字节
         0 => {
-            unsafe {
-                
-                let ptr = id as *const u8;
-                *ptr as isize
+            if let Some(byte_value) = safe_read_user_byte(id) {
+                byte_value as isize
+            } else {
+                // 地址无效或不可读，返回 -1
+                -1
             }
         }
-        // Write a byte to memory address
+        // 写入一个字节到用户地址
         1 => {
-            unsafe {
-                // SAFETY: As per assignment requirements, no safety checks needed
-                let ptr = id as *mut u8;
-                *ptr = data as u8;
+            if safe_write_user_byte(id, data as u8) {
+                // 写入成功，返回 0
                 0
+            } else {
+                // 地址无效或不可写，返回 -1
+                -1
             }
         }
-        // Get syscall count for the specified syscall ID
+        // 获取指定系统调用的调用次数
         2 => {
-            // Note: This call itself should be counted, which is handled in the syscall dispatcher
+            // 注意：这个调用本身也会被计入统计，这在 syscall 分发器中处理
             get_current_syscall_count(id) as isize
         }
-        
-        // Invalid trace_request
+        // 无效的 trace_request
         _ => -1,
     }
-    
 }
 
 // YOUR JOB: Implement mmap.
