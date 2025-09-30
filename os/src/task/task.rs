@@ -1,4 +1,6 @@
 //! Types related to task management
+use alloc::collections::btree_map::BTreeMap;
+
 use super::TaskContext;
 use crate::config::TRAP_CONTEXT_BASE;
 use crate::mm::{
@@ -28,6 +30,10 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+
+    /// System call count statistics for this task
+    /// because we 
+    pub syscall_count: BTreeMap<usize, usize>,
 }
 
 impl TaskControlBlock {
@@ -63,6 +69,7 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            syscall_count: BTreeMap::new(),
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -95,6 +102,17 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+
+    /// Increment the syscall count for a given syscall ID
+    pub fn inc_syscall_count(&mut self, syscall_id: usize) {
+        let count = self.syscall_count.entry(syscall_id).or_insert(0);
+        *count += 1;
+    }
+
+    /// Get the syscall count for a given syscall ID
+    pub fn get_syscall_count(&self, syscall_id: usize) -> usize {
+        *self.syscall_count.get(&syscall_id).unwrap_or(&0)  
     }
 }
 
