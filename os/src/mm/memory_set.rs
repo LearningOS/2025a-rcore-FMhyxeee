@@ -300,6 +300,119 @@ impl MemorySet {
             false
         }
     }
+    /// 检查指定的虚拟地址范围是否与现有映射区域冲突
+    /// 返回 true 表示存在冲突，false 表示无冲突
+    pub fn check_range_conflict(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        
+        for area in &self.areas {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            
+            // 检查是否有重叠：新范围的开始小于现有范围的结束，且新范围的结束大于现有范围的开始
+            if start_vpn < area_end && end_vpn > area_start {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 移除指定虚拟地址范围的映射区域
+    /// 返回 true 表示成功移除，false 表示范围内存在未映射的区域
+    pub fn remove_area_range(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            match self.translate(vpn) {
+                Some(pte) => {
+                    if !pte.is_valid() {
+                        return false; 
+                    }
+                }
+                None => {
+                    return false; 
+                }
+            }
+        }
+
+        // 收集需要移除或修改的区域索引
+        let mut areas_to_remove = Vec::new();
+        let mut areas_to_modify = Vec::new();
+        
+        for (i, area) in self.areas.iter().enumerate() {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            
+            // 检查区域是否与要移除的范围有重叠
+            if start_vpn < area_end && end_vpn > area_start {
+                if start_vpn <= area_start && end_vpn >= area_end {
+                    // 完全包含，标记为移除
+                    areas_to_remove.push(i);
+                } else {
+                    // 部分重叠，需要修改
+                    areas_to_modify.push(i);
+                }
+            }
+        }
+        
+        // 处理需要修改的区域（部分重叠）
+        for &i in &areas_to_modify {
+            let area = &mut self.areas[i];
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            
+            if start_vpn > area_start && end_vpn < area_end {
+                // 要移除的范围在区域中间，需要分割成两个区域
+                // 这种情况比较复杂，为了简化实现，我们先取消整个区域的映射
+                // 然后重新映射前半部分和后半部分
+                area.unmap(&mut self.page_table);
+                
+                // 创建前半部分
+                let mut front_area = MapArea::new(
+                    area_start.into(),
+                    start_vpn.into(),
+                    area.map_type,
+                    area.map_perm,
+                );
+                front_area.map(&mut self.page_table);
+                
+                // 创建后半部分
+                let mut back_area = MapArea::new(
+                    end_vpn.into(),
+                    area_end.into(),
+                    area.map_type,
+                    area.map_perm,
+                );
+                back_area.map(&mut self.page_table);
+                
+                // 替换原区域为前半部分，后半部分将在后面添加
+                *area = front_area;
+                self.areas.push(back_area);
+            } else if start_vpn <= area_start && end_vpn < area_end {
+                // 移除区域的前半部分
+                for vpn in VPNRange::new(area_start, end_vpn) {
+                    area.unmap_one(&mut self.page_table, vpn);
+                }
+                area.vpn_range = VPNRange::new(end_vpn, area_end);
+            } else if start_vpn > area_start && end_vpn >= area_end {
+                // 移除区域的后半部分
+                for vpn in VPNRange::new(start_vpn, area_end) {
+                    area.unmap_one(&mut self.page_table, vpn);
+                }
+                area.vpn_range = VPNRange::new(area_start, start_vpn);
+            }
+        }
+        
+        // 移除完全包含的区域（从后往前移除以避免索引变化）
+        for &i in areas_to_remove.iter().rev() {
+            let mut area = self.areas.remove(i);
+            area.unmap(&mut self.page_table);
+        }
+        true
+    }
+
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
@@ -345,7 +458,7 @@ impl MapArea {
                 self.data_frames.insert(vpn, frame);
             }
         }
-        let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap() | PTEFlags::V;
         page_table.map(vpn, ppn, pte_flags);
     }
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {

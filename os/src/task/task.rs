@@ -2,7 +2,7 @@
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 use crate::config::TRAP_CONTEXT_BASE;
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE, VPNRange};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
@@ -235,6 +235,119 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+
+    /// 实现 mmap 系统调用：将物理内存映射到指定的虚拟地址范围
+    /// 参数：
+    /// - start: 虚拟地址起始位置（必须页对齐）
+    /// - len: 映射长度（字节）
+    /// - prot: 内存保护标志（第0位=可读，第1位=可写，第2位=可执行）
+    /// 返回：成功返回 0，失败返回 -1
+    pub fn mmap(&self, start: usize, len: usize, prot: usize) -> isize {
+        use crate::config::PAGE_SIZE;
+        use crate::mm::{VirtAddr, MapPermission};
+        
+        // 参数验证
+        // 1. 检查 start 是否页对齐
+        if start % PAGE_SIZE != 0 {
+            return -1;
+        }
+        
+        // 2. 检查 prot 的有效性
+        if prot & !0x7 != 0 {  // prot 其余位必须为0
+            return -1;
+        }
+        
+        if prot & 0x7 == 0 {   // 这样的内存无意义
+            return -1;
+        }
+        
+        // 3. 如果 len 为 0，直接返回成功
+        if len == 0 {
+            return 0;
+        }
+        
+        // 计算结束地址（向上取整到页边界）
+        let end = start + len;
+        let end_aligned = (end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+        
+        let start_va = VirtAddr::from(start);
+        let end_va = VirtAddr::from(end_aligned);
+        
+        // 4. 检查地址范围是否与现有映射冲突
+        if self.inner_exclusive_access().memory_set.check_range_conflict(start_va, end_va) {
+            return -1;
+        }
+        
+        // 构建内存权限
+        let mut map_perm = MapPermission::U; // 用户模式可访问
+        if prot & 0x1 != 0 {  // 可读
+            map_perm |= MapPermission::R;
+        }
+        if prot & 0x2 != 0 {  // 可写
+            map_perm |= MapPermission::W;
+        }
+        if prot & 0x4 != 0 {  // 可执行
+            map_perm |= MapPermission::X;
+        }
+        
+        // 执行内存映射
+        self.inner_exclusive_access().memory_set.insert_framed_area(start_va, end_va, map_perm);
+        
+        0  // 成功
+    }
+
+    /// 实现 munmap 系统调用：取消指定虚拟地址范围的内存映射
+    /// 参数：
+    /// - start: 虚拟地址起始位置（必须页对齐）
+    /// - len: 取消映射的长度（字节）
+    /// 返回：成功返回 0，失败返回 -1
+    pub fn munmap(&self, start: usize, len: usize) -> isize {
+        use crate::config::PAGE_SIZE;
+        use crate::mm::VirtAddr;
+        
+        // 参数验证
+        // 1. 检查 start 是否页对齐
+        if start % PAGE_SIZE != 0 {
+            return -1;
+        }
+        
+        // 2. 如果 len 为 0，直接返回成功
+        if len == 0 {
+            return 0;
+        }
+        
+        // 计算结束地址（向上取整到页边界）
+        let end = start + len;
+        let end_aligned = (end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+        
+        let start_va = VirtAddr::from(start);
+        let end_va = VirtAddr::from(end_aligned);
+        
+        // 3. 检查要取消映射的页面范围是否都已映射
+        // 如果范围内包含未映射的页面，则返回错误
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            match self.inner_exclusive_access().memory_set.translate(vpn) {
+                Some(pte) => {
+                    if !pte.is_valid() {
+                        return -1;
+                    }
+                }
+                None => {
+                    return -1;
+                }
+            }
+        }
+        
+        // 4. 执行实际的取消映射
+        if !self.inner_exclusive_access().memory_set.remove_area_range(start_va, end_va) {
+            return -1;  // 范围内存在未映射的虚拟内存
+        }
+        
+        0  // 成功
     }
 }
 

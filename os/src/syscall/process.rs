@@ -154,21 +154,21 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 
 
 /// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
+    if let Some(current_task) = current_task() {
+        current_task.mmap(start, len, port) as isize
+    } else {
+        -1
+    }
 }
 
 /// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    if let Some(current_task) = current_task() {
+        current_task.munmap(start, len) as isize
+    } else {
+        -1
+    }
 }
 
 /// change data segment size
