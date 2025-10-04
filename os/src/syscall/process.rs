@@ -103,9 +103,7 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
     // ---- release current PCB automatically
 }
 
-/// YOUR JOB: get time with second and microsecond
-/// HINT: You might reimplement it with virtual memory management.
-/// HINT: What if [`TimeVal`] is splitted by two pages ?
+
 pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
     
@@ -153,7 +151,6 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 }
 
 
-/// YOUR JOB: Implement mmap.
 pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
     if let Some(current_task) = current_task() {
         current_task.mmap(start, len, port) as isize
@@ -162,7 +159,6 @@ pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
     }
 }
 
-/// YOUR JOB: Implement munmap.
 pub fn sys_munmap(start: usize, len: usize) -> isize {
     if let Some(current_task) = current_task() {
         current_task.munmap(start, len) as isize
@@ -181,14 +177,52 @@ pub fn sys_sbrk(size: i32) -> isize {
     }
 }
 
-/// YOUR JOB: Implement spawn.
-/// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+/// 
+/// spawn系统调用：创建一个新进程执行指定程序
+/// 与fork+exec不同，spawn直接创建新进程，不复制父进程地址空间
+/// 
+/// 参数：
+/// - path: 要执行的程序路径
+/// 
+/// 返回值：
+/// - 成功：子进程PID
+/// - 失败：-1
+pub fn sys_spawn(path: *const u8) -> isize {
+    trace!("kernel:pid[{}] sys_spawn", current_task().unwrap().pid.0);
+    
+    // 获取当前任务和用户页表令牌
+    let current_task = current_task().unwrap();
+    let token = current_user_token();
+    
+    // 将用户空间的路径字符串转换为内核可用的字符串
+    let path_str = translated_str(token, path);
+    
+    // 根据程序名获取程序数据
+    if let Some(elf_data) = get_app_data_by_name(path_str.as_str()) {
+        // 创建新的任务控制块（不复制父进程地址空间）
+        let new_task = Arc::new(crate::task::TaskControlBlock::new(elf_data));
+        let new_pid = new_task.pid.0;
+        
+        // 建立父子关系
+        {
+            let mut current_inner = current_task.inner_exclusive_access();
+            let mut new_inner = new_task.inner_exclusive_access();
+            
+            // 设置父进程
+            new_inner.parent = Some(Arc::downgrade(&current_task));
+            // 将新进程添加到父进程的子进程列表
+            current_inner.children.push(new_task.clone());
+        }
+        
+        // 将新任务添加到调度器
+        add_task(new_task);
+        
+        // 返回新进程的PID
+        new_pid as isize
+    } else {
+        // 程序文件不存在，返回错误
+        -1
+    }
 }
 
 // YOUR JOB: Set task priority.
