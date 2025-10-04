@@ -225,11 +225,33 @@ pub fn sys_spawn(path: *const u8) -> isize {
     }
 }
 
-// YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
+/// 设置当前进程的优先级
+/// 
+/// # 参数
+/// * `prio` - 新的优先级值，必须 >= 2
+/// 
+/// # 返回值
+/// * 成功时返回设置的优先级值
+/// * 失败时返回 -1（当 prio < 2 时）
+pub fn sys_set_priority(prio: isize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
+        "kernel:pid[{}] sys_set_priority prio={}",
+        current_task().unwrap().pid.0,
+        prio
     );
-    -1
+    
+    // 检查优先级参数是否合法（必须 >= 2）
+    if prio < 2 {
+        return -1;
+    }
+    
+    // 获取当前任务
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    
+    // 设置新的优先级
+    inner.priority = prio as usize;
+    
+    // 返回设置的优先级值
+    prio
 }
