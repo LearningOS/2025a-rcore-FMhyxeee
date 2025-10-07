@@ -125,6 +125,45 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     }
 }
 
+/// Find inode by name and return its inode ID
+pub fn find_inode_by_name(name: &str) -> Option<(Arc<Inode>, u32)> {
+    if let Some(inode) = ROOT_INODE.find(name) {
+        // Calculate inode ID from block position
+        let apps = ROOT_INODE.ls();
+        for (id, app_name) in apps.iter().enumerate() {
+            if app_name == name {
+                return Some((inode, id as u32));
+            }
+        }
+    }
+    None
+}
+
+/// Create a hard link
+pub fn link_file(oldpath: &str, newpath: &str) -> bool {
+    // Check if oldpath exists
+    if let Some((target_inode, inode_id)) = find_inode_by_name(oldpath) {
+        // Check if newpath already exists
+        if ROOT_INODE.find(newpath).is_some() {
+            return false; // newpath already exists
+        }
+        
+        // Create hard link
+        target_inode.link_to(&ROOT_INODE, newpath, inode_id)
+    } else {
+        false // oldpath doesn't exist
+    }
+}
+
+/// Remove a hard link
+pub fn unlink_file(path: &str) -> bool {
+    if let Some((target_inode, _)) = find_inode_by_name(path) {
+        target_inode.unlink(&ROOT_INODE, path)
+    } else {
+        false // path doesn't exist
+    }
+}
+
 impl File for OSInode {
     fn readable(&self) -> bool {
         self.readable
@@ -155,5 +194,9 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn get_stat(&self) -> Option<(u64, u32, bool)> {
+        let inner = self.inner.exclusive_access();
+        Some(inner.inode.get_stat())
     }
 }

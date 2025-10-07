@@ -1,6 +1,6 @@
 //! File and filesystem-related syscalls
-use crate::fs::{open_file, OpenFlags, Stat};
-use crate::mm::{translated_byte_buffer, translated_str, UserBuffer};
+use crate::fs::{open_file, OpenFlags, Stat, StatMode, link_file, unlink_file};
+use crate::mm::{translated_byte_buffer, translated_str, translated_refmut, UserBuffer};
 use crate::task::{current_task, current_user_token};
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
@@ -76,28 +76,66 @@ pub fn sys_close(fd: usize) -> isize {
 }
 
 /// YOUR JOB: Implement fstat.
-pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_fstat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
+    trace!("kernel:pid[{}] sys_fstat", current_task().unwrap().pid.0);
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+    if fd >= inner.fd_table.len() {
+        return -1;
+    }
+    if let Some(file) = &inner.fd_table[fd] {
+        if let Some((_size, nlink, is_dir)) = file.get_stat() {
+            let token = current_user_token();
+            let stat_ptr = translated_refmut(token, st);
+            
+            stat_ptr.dev = 0; // 写死为0
+            stat_ptr.ino = 0; // 简化处理，设为0
+            stat_ptr.mode = if is_dir { StatMode::DIR } else { StatMode::FILE };
+            stat_ptr.nlink = nlink;
+            
+            0
+        } else {
+            -1 // 不是文件类型
+        }
+    } else {
+        -1
+    }
 }
 
 /// YOUR JOB: Implement linkat.
-pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_linkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_linkat(
+    _olddirfd: i32,
+    oldpath: *const u8,
+    _newdirfd: i32,
+    newpath: *const u8,
+    _flags: u32,
+) -> isize {
+    trace!("kernel:pid[{}] sys_linkat", current_task().unwrap().pid.0);
+    let token = current_user_token();
+    let oldpath_str = translated_str(token, oldpath);
+    let newpath_str = translated_str(token, newpath);
+    
+    // Check if linking to the same file (error case)
+    if oldpath_str == newpath_str {
+        return -1;
+    }
+    
+    if link_file(oldpath_str.as_str(), newpath_str.as_str()) {
+        0
+    } else {
+        -1
+    }
 }
 
 /// YOUR JOB: Implement unlinkat.
-pub fn sys_unlinkat(_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_unlinkat(_dirfd: i32, path: *const u8, _flags: u32) -> isize {
+    trace!("kernel:pid[{}] sys_unlinkat", current_task().unwrap().pid.0);
+    let token = current_user_token();
+    let path_str = translated_str(token, path);
+    
+    if unlink_file(path_str.as_str()) {
+        0
+    } else {
+        -1
+    }
 }

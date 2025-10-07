@@ -183,4 +183,122 @@ impl Inode {
         });
         block_cache_sync_all();
     }
+    /// Create a hard link to this inode in the given directory
+    pub fn link_to(&self, dir: &Arc<Inode>, name: &str, target_inode_id: u32) -> bool {
+        let mut fs = self.fs.lock();
+        // Check if the name already exists in the directory
+        if dir.read_disk_inode(|disk_inode| {
+            dir.find_inode_id(name, disk_inode).is_some()
+        }) {
+            return false; // Name already exists
+        }
+        
+        // Increase nlink count
+        self.modify_disk_inode(|disk_inode| {
+            disk_inode.nlink += 1;
+        });
+        
+        // Add directory entry
+        dir.modify_disk_inode(|root_inode| {
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            dir.increase_size(new_size as u32, root_inode, &mut fs);
+            let dirent = DirEntry::new(name, target_inode_id);
+            root_inode.write_at(
+                file_count * DIRENT_SZ,
+                dirent.as_bytes(),
+                &self.block_device,
+            );
+        });
+        
+        block_cache_sync_all();
+        true
+    }
+    
+    /// Remove a hard link (unlink)
+    pub fn unlink(&self, dir: &Arc<Inode>, name: &str) -> bool {
+        let mut fs = self.fs.lock();
+        
+        // Find and remove the directory entry
+        let mut found = false;
+        let mut target_inode_id = 0u32;
+        
+        dir.modify_disk_inode(|disk_inode| {
+            assert!(disk_inode.is_dir());
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut dirent = DirEntry::empty();
+            
+            for i in 0..file_count {
+                assert_eq!(
+                    disk_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device),
+                    DIRENT_SZ,
+                );
+                if dirent.name() == name {
+                    target_inode_id = dirent.inode_id();
+                    found = true;
+                    
+                    // Move the last entry to this position
+                    if i < file_count - 1 {
+                        let mut last_dirent = DirEntry::empty();
+                        assert_eq!(
+                            disk_inode.read_at(
+                                DIRENT_SZ * (file_count - 1),
+                                last_dirent.as_bytes_mut(),
+                                &self.block_device
+                            ),
+                            DIRENT_SZ,
+                        );
+                        disk_inode.write_at(
+                            DIRENT_SZ * i,
+                            last_dirent.as_bytes(),
+                            &self.block_device,
+                        );
+                    }
+                    
+                    // Decrease directory size
+                    disk_inode.size -= DIRENT_SZ as u32;
+                    break;
+                }
+            }
+        });
+        
+        if !found {
+            return false;
+        }
+        
+        // Decrease nlink count
+        let should_delete = self.modify_disk_inode(|disk_inode| {
+            disk_inode.nlink -= 1;
+            disk_inode.nlink == 0
+        });
+        
+        // If nlink reaches 0, deallocate the inode and its data blocks
+        if should_delete {
+            self.modify_disk_inode(|disk_inode| {
+                let _size = disk_inode.size;
+                let data_blocks_dealloc = disk_inode.clear_size(&self.block_device);
+                for data_block in data_blocks_dealloc.into_iter() {
+                    fs.dealloc_data(data_block);
+                }
+            });
+            fs.dealloc_inode(target_inode_id);
+        }
+        
+        block_cache_sync_all();
+        true
+    }
+    
+
+    
+    /// Get the number of hard links
+    pub fn get_nlink(&self) -> u32 {
+        self.read_disk_inode(|disk_inode| disk_inode.nlink)
+    }
+    
+    /// Get file statistics
+    pub fn get_stat(&self) -> (u64, u32, bool) {
+        self.read_disk_inode(|disk_inode| {
+            (disk_inode.size as u64, disk_inode.nlink, disk_inode.is_dir())
+        })
+    }
 }
