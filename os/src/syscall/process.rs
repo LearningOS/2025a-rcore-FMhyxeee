@@ -3,7 +3,7 @@
 use alloc::sync::Arc;
 
 use crate::{
-    fs::{open_file, OpenFlags}, loader::get_app_data_by_name, mm::{translated_byte_buffer, translated_refmut, translated_str}, task::{
+    fs::{open_file, OpenFlags}, mm::{translated_byte_buffer, translated_refmut, translated_str}, task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next,
     }, timer::get_time_us
@@ -23,7 +23,7 @@ pub fn sys_exit(exit_code: i32) -> ! {
 }
 
 pub fn sys_yield() -> isize {
-    //trace!("kernel: sys_yield");
+    trace!("kernel:pid[{}] sys_yield", current_task().unwrap().pid.0);
     suspend_current_and_run_next();
     0
 }
@@ -181,9 +181,10 @@ pub fn sys_spawn(path: *const u8) -> isize {
     let path_str = translated_str(token, path);
     
     // 根据程序名获取程序数据
-    if let Some(elf_data) = get_app_data_by_name(path_str.as_str()) {
+    if let Some(app_inode) = open_file(path_str.as_str(), OpenFlags::RDONLY) {
+        let elf_data = app_inode.read_all();
         // 创建新的任务控制块（不复制父进程地址空间）
-        let new_task = Arc::new(crate::task::TaskControlBlock::new(elf_data));
+        let new_task = Arc::new(crate::task::TaskControlBlock::new(elf_data.as_slice()));
         let new_pid = new_task.pid.0;
         
         // 建立父子关系

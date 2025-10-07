@@ -38,7 +38,7 @@ pub mod config;
 pub mod drivers;
 pub mod fs;
 pub mod lang_items;
-mod loader;
+// mod loader; // Chapter 6 uses filesystem instead of linked apps
 pub mod logging;
 pub mod mm;
 pub mod sbi;
