@@ -84,15 +84,25 @@ pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
         return -1;
     }
     if let Some(file) = &inner.fd_table[fd] {
+        // Clone the file to avoid holding the task inner lock while calling get_stat
+        let file = file.clone();
+        // release current task TCB manually to avoid multi-borrow
+        drop(inner);
+
         if let Some((_size, nlink, is_dir)) = file.get_stat() {
             let token = current_user_token();
             let stat_ptr = translated_refmut(token, st);
-            
+
             stat_ptr.dev = 0; // 写死为0
-            stat_ptr.ino = 0; // 简化处理，设为0
+            // Try to get the actual inode ID, fallback to 0 if not available
+            if let Some(os_inode) = file.as_any().downcast_ref::<crate::fs::OSInode>() {
+                stat_ptr.ino = os_inode.get_inode_id().unwrap_or(0) as u64;
+            } else {
+                stat_ptr.ino = 0; // For non-file types like stdin/stdout
+            }
             stat_ptr.mode = if is_dir { StatMode::DIR } else { StatMode::FILE };
             stat_ptr.nlink = nlink;
-            
+
             0
         } else {
             -1 // 不是文件类型

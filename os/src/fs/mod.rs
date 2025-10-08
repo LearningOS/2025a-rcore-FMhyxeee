@@ -19,6 +19,8 @@ pub trait File: Send + Sync {
     fn get_stat(&self) -> Option<(u64, u32, bool)> {
         None // Default implementation for non-file types
     }
+    /// get as any for downcasting
+    fn as_any(&self) -> &dyn core::any::Any;
 }
 
 /// The stat of a inode

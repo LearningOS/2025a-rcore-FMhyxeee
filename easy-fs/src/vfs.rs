@@ -301,4 +301,17 @@ impl Inode {
             (disk_inode.size as u64, disk_inode.nlink, disk_inode.is_dir())
         })
     }
+
+    /// Get the actual inode ID of this inode
+    pub fn get_inode_id(&self) -> u32 {
+        use crate::BLOCK_SZ;
+        let inode_size = core::mem::size_of::<crate::layout::DiskInode>();
+        let inodes_per_block = (BLOCK_SZ / inode_size) as u32;
+
+        // Calculate inode ID from disk position
+        let fs = self.fs.lock();
+        let relative_block = self.block_id as u32 - fs.inode_area_start_block;
+        let inode_id = relative_block * inodes_per_block + (self.block_offset / inode_size) as u32;
+        inode_id
+    }
 }

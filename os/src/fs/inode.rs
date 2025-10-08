@@ -128,7 +128,8 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
 /// Find inode by name and return its inode ID
 pub fn find_inode_by_name(name: &str) -> Option<(Arc<Inode>, u32)> {
     if let Some(inode) = ROOT_INODE.find(name) {
-        // Calculate inode ID from block position
+        // Create a simple mapping from filename to inode ID
+        // This is a simplified approach - in a real filesystem we'd need to track this properly
         let apps = ROOT_INODE.ls();
         for (id, app_name) in apps.iter().enumerate() {
             if app_name == name {
@@ -142,14 +143,15 @@ pub fn find_inode_by_name(name: &str) -> Option<(Arc<Inode>, u32)> {
 /// Create a hard link
 pub fn link_file(oldpath: &str, newpath: &str) -> bool {
     // Check if oldpath exists
-    if let Some((target_inode, inode_id)) = find_inode_by_name(oldpath) {
+    if let Some(target_inode) = ROOT_INODE.find(oldpath) {
         // Check if newpath already exists
         if ROOT_INODE.find(newpath).is_some() {
             return false; // newpath already exists
         }
-        
-        // Create hard link
-        target_inode.link_to(&ROOT_INODE, newpath, inode_id)
+
+        // Get the actual inode ID from the target inode
+        let real_inode_id = target_inode.get_inode_id();
+        return target_inode.link_to(&ROOT_INODE, newpath, real_inode_id);
     } else {
         false // oldpath doesn't exist
     }
@@ -157,10 +159,30 @@ pub fn link_file(oldpath: &str, newpath: &str) -> bool {
 
 /// Remove a hard link
 pub fn unlink_file(path: &str) -> bool {
-    if let Some((target_inode, _)) = find_inode_by_name(path) {
+    if let Some(target_inode) = ROOT_INODE.find(path) {
         target_inode.unlink(&ROOT_INODE, path)
     } else {
         false // path doesn't exist
+    }
+}
+
+impl OSInode {
+    /// Get inode ID by searching in root directory
+    pub fn get_inode_id(&self) -> Option<u32> {
+        let inner = self.inner.exclusive_access();
+        let target_inode = &inner.inode;
+        
+        // Search through root directory to find this inode
+        let apps = ROOT_INODE.ls();
+        for (id, app_name) in apps.iter().enumerate() {
+            if let Some(found_inode) = ROOT_INODE.find(app_name) {
+                // Compare inode pointers (this is a simple way to check if they're the same)
+                if Arc::ptr_eq(target_inode, &found_inode) {
+                    return Some(id as u32);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -198,5 +220,8 @@ impl File for OSInode {
     fn get_stat(&self) -> Option<(u64, u32, bool)> {
         let inner = self.inner.exclusive_access();
         Some(inner.inode.get_stat())
+    }
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
     }
 }
