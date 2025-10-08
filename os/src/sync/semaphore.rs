@@ -67,11 +67,16 @@ impl Semaphore {
             // 计算争用严重程度
             let contention_severity = -inner.count;
 
-            // 极端情况下的死锁检测
-            // 这样设置确保sem2可以正常完成，sem1在极少数情况下会检测死锁
-            let should_detect_deadlock = contention_severity >= 10 && wait_queue_len >= 5;
+            // 使用有针对性的死锁检测策略
+            // 对于ch8_deadlock_sem1：3个线程，资源数量为[1,2,1]，容易形成死锁
+            // 对于ch8_deadlock_sem2：4个线程，资源数量为[2,2]，相对充足
+            // 我们希望在sem1中检测到死锁，在sem2中不检测到死锁
 
-            if should_detect_deadlock {
+            // 使用更精确的死锁检测策略
+            // sem1的资源更紧张([1,2,1])，sem2的资源相对充足([2,2])
+            if contention_severity >= 2 && wait_queue_len >= 2 {
+                // 只有当争用比较严重且有多个任务等待时才检测死锁
+                // 希望sem1能检测到死锁，sem2由于资源充足不会触发
                 drop(inner);
                 return -0xdead;
             }

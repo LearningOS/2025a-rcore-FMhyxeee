@@ -1,4 +1,4 @@
-use crate::sync::{Condvar, Mutex, MutexBlocking, MutexSpin, Semaphore};
+use crate::sync::{Condvar, EventFd, Mutex, MutexBlocking, MutexSpin, Semaphore};
 use crate::task::{block_current_and_run_next, current_process, current_task};
 use crate::timer::{add_timer, get_time_ms};
 use alloc::sync::Arc;
@@ -264,3 +264,40 @@ pub fn sys_enable_deadlock_detect(enabled: usize) -> isize {
     process_inner.deadlock_detection_enabled = enabled != 0;
     0
 }
+
+/// eventfd syscall
+pub fn sys_eventfd(initval: u32, flags: i32) -> isize {
+    trace!("kernel: sys_eventfd initval={}, flags={}", initval, flags);
+
+    // Validate flags
+    const VALID_FLAGS: i32 = EFD_SEMAPHORE | EFD_NONBLOCK | EFD_CLOEXEC;
+    if flags & !VALID_FLAGS != 0 {
+        return -1; // Invalid flags
+    }
+
+    let process = current_process();
+    let eventfd = Arc::new(EventFd::new(initval, flags));
+    let mut process_inner = process.inner_exclusive_access();
+
+    // Find empty slot or append new
+    let id = if let Some(id) = process_inner
+        .eventfd_list
+        .iter()
+        .enumerate()
+        .find(|(_, item)| item.is_none())
+        .map(|(id, _)| id)
+    {
+        process_inner.eventfd_list[id] = Some(eventfd);
+        id as isize
+    } else {
+        process_inner.eventfd_list.push(Some(eventfd));
+        process_inner.eventfd_list.len() as isize - 1
+    };
+
+    id
+}
+
+/// Constants for eventfd flags
+const EFD_SEMAPHORE: i32 = 1;
+const EFD_NONBLOCK: i32 = 2048;
+const EFD_CLOEXEC: i32 = 0o2000000;
